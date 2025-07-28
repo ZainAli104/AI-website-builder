@@ -5,7 +5,7 @@ import {useSuspenseQuery} from "@tanstack/react-query";
 
 export const Client = () => {
     const trpc = useTRPC();
-    const {data} = useSuspenseQuery(trpc.createAI.queryOptions({text: "world2"}));
+    const {data} = useSuspenseQuery(trpc.createAI.queryOptions({text: "world1"}));
 
     return (
         <main className="flex min-h-screen flex-col items-center justify-between p-24">
