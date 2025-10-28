@@ -10,6 +10,7 @@
     "inngest": "npx inngest-cli@latest dev"
   },
   "dependencies": {
+    "@e2b/code-interpreter": "^2.0.0",
     "@inngest/agent-kit": "^0.9.0",
     "@prisma/client": "^6.11.1",
     "@radix-ui/react-slot": "^1.2.3",
