@@ -10,7 +10,7 @@ const Home = async () => {
 
     return (
         <div>
-            <Button onClick={() => invoke.mutate({ text: "Test" })}>
+            <Button onClick={() => invoke.mutate({ text: "Create button" })}>
                 Test
             </Button>
         </div>
