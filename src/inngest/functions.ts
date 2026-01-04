@@ -1,8 +1,10 @@
+import {z} from "zod";
 import {Sandbox} from "@e2b/code-interpreter";
-import {Agent, openai, createAgent} from "@inngest/agent-kit";
+import {openai, createAgent, createTool, createNetwork} from "@inngest/agent-kit";
 
+import {PROMPT} from "@/prompt";
 import {inngest} from "./client";
-import {getSandbox} from "./utils";
+import {getSandbox, lastAssistantTextMessageContent} from "./utils";
 
 export const helloWorld = inngest.createFunction(
     {id: "hello-world"},
@@ -15,13 +17,128 @@ export const helloWorld = inngest.createFunction(
 
         const codeAgent = createAgent({
             name: "code-agent",
-            system: "You are an expert Next.js developer. You write readable, maintainable, and efficient code. You write simple Next.js & React snippets.",
-            model: openai({model: "gpt-4o-mini"}),
+            description: "An expert coding agent.",
+            system: PROMPT,
+            model: openai({
+                model: "gpt-5-mini",
+            }),
+            tools: [
+                createTool({
+                    name: "terminal",
+                    description: "Use the terminal to run commands in the sandbox.",
+                    parameters: z.object({
+                        command: z.string().describe("The command to run in the terminal."),
+                    }),
+                    handler: async ({command}, {step}) => {
+                        return await step?.run("terminal", async () => {
+                            const buffers = {stdout: "", stderr: ""};
+
+                            try {
+                                const sandbox = await getSandbox(sanboxId);
+                                const result = await sandbox.commands.run(command, {
+                                    onStdout: (data: string) => {
+                                        buffers.stdout += data;
+                                    },
+                                    onStderr: (data: string) => {
+                                        buffers.stderr += data;
+                                    }
+                                });
+                                return result.stdout;
+                            } catch (err) {
+                                console.error(`Error: ${err}\nStderr: ${buffers.stderr}\nStdout: ${buffers.stdout}`);
+                                return `Error: ${err}\nStderr: ${buffers.stderr}\nStdout: ${buffers.stdout}`;
+                            }
+                        })
+                    }
+                }),
+                createTool({
+                    name: "createOrUpdateFiles",
+                    description: "Create or update files in the sandbox.",
+                    parameters: z.object({
+                        files: z.array(
+                            z.object({
+                                path: z.string(),
+                                content: z.string()
+                            })
+                        )
+                    }),
+                    handler: async ({files}, {step, network}) => {
+                        const newFiles = await step?.run("createOrUpdateFiles", async () => {
+                            try {
+                                const updatedFiles = network.state.data.files || {};
+                                const sandbox = await getSandbox(sanboxId);
+                                for (const file of files) {
+                                    await sandbox.files.write(file.path, file.content);
+                                    updatedFiles[file.path] = file.content;
+                                }
+                                return updatedFiles;
+                            } catch (err) {
+                                return `Error: ${err}`;
+                            }
+                        });
+
+                        if (typeof newFiles === "object") {
+                            network.state.data.files = newFiles;
+                        }
+                    }
+                }),
+                createTool({
+                    name: "readFiles",
+                    description: "Read files from the sandbox.",
+                    parameters: z.object({
+                        paths: z.array(z.string())
+                    }),
+                    handler: async ({paths}, {step}) => {
+                        return await step?.run("readFiles", async () => {
+                            try {
+                                const sandbox = await getSandbox(sanboxId);
+                                let filesContent = [];
+                                for (const path of paths) {
+                                    const content = await sandbox.files.read(path);
+                                    filesContent.push({
+                                        path,
+                                        content
+                                    });
+                                }
+                                return JSON.stringify(filesContent);
+                            } catch (err) {
+                                return `Error: ${err}`;
+                            }
+                        });
+                    }
+                }),
+            ],
+            lifecycle: {
+                onResponse: async ({result, network}) => {
+                    const lastAssistantMessage = lastAssistantTextMessageContent(result);
+
+                    if (lastAssistantMessage && network) {
+                        if (lastAssistantMessage.includes("<task_summary>")) {
+                            network.state.data.summary = lastAssistantMessage;
+                        }
+                    }
+
+                    return result;
+                },
+            },
         });
 
-        const {output} = await codeAgent.run(
-            `Write the following snippet: ${event.data.value}`,
-        );
+        const network = createNetwork({
+            name: "coding-agent-network",
+            agents: [codeAgent],
+            maxIter: 15,
+            router: async ({network}) => {
+                const summary = network.state.data.summary;
+                if (summary) {
+                    return
+                }
+
+                return codeAgent;
+            },
+        });
+
+        // const result = await network.run(event.data.value);
+        const result = await network.run("Create a calculator app.");
 
         const sandboxUrl = await step.run("get-sandbox-url", async () => {
             const sandbox = await getSandbox(sanboxId);
@@ -30,8 +147,10 @@ export const helloWorld = inngest.createFunction(
         });
 
         return {
-            output,
-            sandboxUrl
+            url: sandboxUrl,
+            title: "Fragment",
+            files: result.state.data.files,
+            summary: result.state.data.summary,
         };
     },
 );
